@@ -16,7 +16,6 @@
   <script type="text/babel">
     const { useState, useEffect } = React;
 
-    // Lucide React icons as inline SVG components
     const FileText = ({ className }) => (
       <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -104,13 +103,11 @@
       const [showDashboard, setShowDashboard] = useState(true);
       const [showEstimateInfo, setShowEstimateInfo] = useState(false);
 
-      // Azure AD Configuration
       const CLIENT_ID = 'b2412250-afe8-4ce4-b723-e463d309e2bd';
       const TENANT_ID = '2cc0500a-7eba-4d4c-abb5-944473559b47';
       const REDIRECT_URI = window.location.origin + window.location.pathname;
       const SCOPES = ['Sites.Read.All', 'Files.ReadWrite.All', 'User.Read'];
 
-      // Microsoft Authentication
       const login = () => {
         const authUrl = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/authorize?` +
           `client_id=${CLIENT_ID}` +
@@ -131,7 +128,6 @@
         setScanCache({});
       };
 
-      // Handle OAuth redirect
       useEffect(() => {
         const hash = window.location.hash.substring(1);
         const params = new URLSearchParams(hash);
@@ -157,19 +153,16 @@
         }
       };
 
-      // Calculate storage analytics
       const getStorageAnalytics = () => {
         const totalSize = documents.reduce((sum, doc) => sum + doc.size, 0);
         const totalVersions = documents.reduce((sum, doc) => sum + doc.versionCount, 0);
-        const estimatedVersionSize = totalSize * 0.8; // Rough estimate: versions ~80% of current size
+        const estimatedVersionSize = totalSize * 0.8;
         const avgVersionsPerDoc = documents.length > 0 ? totalVersions / documents.length : 0;
         
-        // Estimate space to reclaim from selected docs
         const selectedSize = documents
           .filter(doc => selectedDocs.has(doc.id))
           .reduce((sum, doc) => sum + (doc.size * (doc.versionCount - 1) * 0.8), 0);
 
-        // Top space wasters
         const topWasters = [...documents]
           .map(doc => ({
             ...doc,
@@ -189,7 +182,6 @@
         };
       };
 
-      // Analyze SharePoint site with caching
       const analyzeSite = async (forceRefresh = false) => {
         if (!siteUrl.trim()) {
           setError('Please enter a SharePoint site URL');
@@ -328,7 +320,6 @@
         return docs;
       };
 
-      // Filter and sort documents
       useEffect(() => {
         let filtered = documents.filter(doc =>
           doc.versionCount >= minVersions &&
@@ -337,7 +328,6 @@
            (doc.folderPath && doc.folderPath.toLowerCase().includes(searchTerm.toLowerCase())))
         );
 
-        // Sort based on selected criteria
         filtered.sort((a, b) => {
           if (sortBy === 'versionCount') return b.versionCount - a.versionCount;
           if (sortBy === 'size') return b.size - a.size;
@@ -353,7 +343,6 @@
         setFilteredDocs(filtered);
       }, [searchTerm, minVersions, documents, sortBy]);
 
-      // Bulk selection filters
       const bulkSelectByVersions = (minVers) => {
         const toSelect = filteredDocs.filter(doc => doc.versionCount >= minVers).map(d => d.id);
         setSelectedDocs(new Set(toSelect));
@@ -379,102 +368,6 @@
         setSelectedDocs(new Set(toSelect));
       };
 
-      // Quick action: Keep only X versions
-      const keepOnlyXVersions = async (keepCount) => {
-        if (selectedDocs.size === 0) {
-          alert('Please select documents first');
-          return;
-        }
-
-        if (!confirm(`Delete all but the last ${keepCount} version(s) for ${selectedDocs.size} document(s)?`)) return;
-
-        setLoading(true);
-        let successCount = 0;
-
-        for (const docId of selectedDocs) {
-          const doc = documents.find(d => d.id === docId);
-          if (!doc || doc.versions.length <= keepCount) continue;
-
-          try {
-            const versionsToDelete = doc.versions.slice(keepCount);
-            for (const version of versionsToDelete) {
-              await fetch(
-                `https://graph.microsoft.com/v1.0/drives/${doc.driveId}/items/${doc.itemId}/versions/${version.id}`,
-                {
-                  method: 'DELETE',
-                  headers: { Authorization: `Bearer ${accessToken}` }
-                }
-              );
-            }
-            successCount++;
-          } catch (err) {
-            console.error(`Failed to delete versions for ${doc.name}:`, err);
-          }
-        }
-
-        alert(`Successfully processed ${successCount} document(s)`);
-        setSelectedDocs(new Set());
-        setScanCache(prev => {
-          const newCache = { ...prev };
-          delete newCache[siteUrl];
-          return newCache;
-        });
-        analyzeSite(true);
-        setLoading(false);
-      };
-
-      // Quick action: Delete versions older than X months
-      const deleteVersionsOlderThan = async (monthsOld) => {
-        if (selectedDocs.size === 0) {
-          alert('Please select documents first');
-          return;
-        }
-
-        const cutoffDate = new Date();
-        cutoffDate.setMonth(cutoffDate.getMonth() - monthsOld);
-
-        if (!confirm(`Delete versions older than ${monthsOld} months for ${selectedDocs.size} document(s)?`)) return;
-
-        setLoading(true);
-        let successCount = 0;
-        let versionsDeleted = 0;
-
-        for (const docId of selectedDocs) {
-          const doc = documents.find(d => d.id === docId);
-          if (!doc) continue;
-
-          try {
-            for (const version of doc.versions.slice(1)) {
-              const versionDate = new Date(version.lastModifiedDateTime);
-              if (versionDate < cutoffDate) {
-                await fetch(
-                  `https://graph.microsoft.com/v1.0/drives/${doc.driveId}/items/${doc.itemId}/versions/${version.id}`,
-                  {
-                    method: 'DELETE',
-                    headers: { Authorization: `Bearer ${accessToken}` }
-                  }
-                );
-                versionsDeleted++;
-              }
-            }
-            successCount++;
-          } catch (err) {
-            console.error(`Failed to delete versions for ${doc.name}:`, err);
-          }
-        }
-
-        alert(`Successfully processed ${successCount} document(s). Deleted ${versionsDeleted} old versions.`);
-        setSelectedDocs(new Set());
-        setScanCache(prev => {
-          const newCache = { ...prev };
-          delete newCache[siteUrl];
-          return newCache;
-        });
-        analyzeSite(true);
-        setLoading(false);
-      };
-
-      // Export to CSV
       const exportToCSV = () => {
         const analytics = getStorageAnalytics();
         
@@ -561,45 +454,6 @@
 
       const getTotalSelectedVersionsCount = () => {
         return Object.values(selectedVersions).reduce((total, versions) => total + versions.size, 0);
-      };
-
-      const deleteVersions = async () => {
-        if (selectedDocs.size === 0) return;
-
-        if (!confirm(`Delete ALL version history for ${selectedDocs.size} document(s)? This will move versions to the SharePoint Recycle Bin.`)) return;
-
-        setLoading(true);
-        let successCount = 0;
-
-        for (const docId of selectedDocs) {
-          const doc = documents.find(d => d.id === docId);
-          if (!doc) continue;
-
-          try {
-            for (const version of doc.versions.slice(1)) {
-              await fetch(
-                `https://graph.microsoft.com/v1.0/drives/${doc.driveId}/items/${doc.itemId}/versions/${version.id}`,
-                {
-                  method: 'DELETE',
-                  headers: { Authorization: `Bearer ${accessToken}` }
-                }
-              );
-            }
-            successCount++;
-          } catch (err) {
-            console.error(`Failed to delete versions for ${doc.name}:`, err);
-          }
-        }
-
-        alert(`Successfully deleted version history for ${successCount} document(s). Versions moved to Recycle Bin.`);
-        setSelectedDocs(new Set());
-        setScanCache(prev => {
-          const newCache = { ...prev };
-          delete newCache[siteUrl];
-          return newCache;
-        });
-        analyzeSite(true);
-        setLoading(false);
       };
 
       const deleteSelectedVersions = async (docId) => {
@@ -785,147 +639,40 @@
               )}
             </div>
 
-            {analytics && (
-              <div className="mb-6">
-                <div className="flex justify-between items-center mb-3">
-                  <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-                    <BarChart className="w-5 h-5" />
-                    Storage Analytics Dashboard
-                  </h2>
-                  <button
-                    onClick={() => setShowDashboard(!showDashboard)}
-                    className="text-sm text-blue-600 hover:text-blue-800"
-                  >
-                    {showDashboard ? 'Hide' : 'Show'}
-                  </button>
+            {analytics && analytics.topWasters.length > 0 && (
+              <div className="bg-white rounded-lg shadow p-4 mb-6">
+                <h3 className="font-medium text-gray-800 mb-3">Top 5 Space Wasters</h3>
+                <div className="space-y-2">
+                  {analytics.topWasters.map((doc, idx) => (
+                    <div
+                      key={doc.id}
+                      className="flex items-center justify-between text-sm hover:bg-gray-50 p-2 rounded transition-colors"
+                    >
+                      <div className="flex-1 truncate">
+                        <span className="text-gray-400 mr-2">{idx + 1}.</span>
+                        <button
+                          onClick={() => {
+                            const element = document.getElementById(`doc-row-${doc.id}`);
+                            if (element) {
+                              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              element.classList.add('bg-yellow-100');
+                              setTimeout(() => {
+                                element.classList.remove('bg-yellow-100');
+                              }, 2000);
+                            }
+                          }}
+                          className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                        >
+                          {doc.name}
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="text-gray-600">{doc.versionCount} versions</span>
+                        <span className="font-semibold text-orange-600">{formatBytes(doc.estimatedVersionSpace)}</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-
-                {showDashboard && (
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-                    <div className="bg-white rounded-lg shadow p-4">
-                      <div className="text-sm text-gray-600">Total Documents</div>
-                      <div className="text-2xl font-bold text-gray-900">{analytics.totalDocs}</div>
-                      <div className="text-xs text-gray-500 mt-1">{analytics.totalVersions} total versions</div>
-                    </div>
-                    <div className="bg-white rounded-lg shadow p-4">
-                      <div className="text-sm text-gray-600">Avg Versions/Doc</div>
-                      <div className="text-2xl font-bold text-gray-900">{analytics.avgVersionsPerDoc.toFixed(1)}</div>
-                      <div className="text-xs text-gray-500 mt-1">per document</div>
-                    </div>
-                    <div className="bg-white rounded-lg shadow p-4">
-                      <div className="text-sm text-gray-600 flex items-center gap-1">
-                        Estimated Version Storage
-                        <button
-                          onClick={() => setShowEstimateInfo(!showEstimateInfo)}
-                          className="text-blue-500 hover:text-blue-700"
-                          title="Click for info about estimates"
-                        >
-                          <InfoCircle className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <div className="text-2xl font-bold text-orange-600">{formatBytes(analytics.estimatedVersionSize)}</div>
-                      <div className="text-xs text-gray-500 mt-1">~80% of current size</div>
-                    </div>
-                    <div className="bg-white rounded-lg shadow p-4">
-                      <div className="text-sm text-gray-600 flex items-center gap-1">
-                        Selected Impact
-                        <button
-                          onClick={() => setShowEstimateInfo(!showEstimateInfo)}
-                          className="text-blue-500 hover:text-blue-700"
-                          title="Click for info about estimates"
-                        >
-                          <InfoCircle className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <div className="text-2xl font-bold text-green-600">{formatBytes(analytics.selectedSize)}</div>
-                      <div className="text-xs text-gray-500 mt-1">potential space to reclaim</div>
-                    </div>
-                  </div>
-                )}
-
-                {showEstimateInfo && (
-                  <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 mb-4">
-                    <div className="flex items-start gap-3">
-                      <InfoCircle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
-                      <div className="flex-1">
-                        <h4 className="font-semibold text-blue-900 mb-2">About Storage Estimates</h4>
-                        <div className="text-sm text-blue-800 space-y-2">
-                          <p>
-                            <strong>These are estimates</strong> because Microsoft doesn't provide actual version sizes through their API.
-                          </p>
-                          <p>
-                            <strong>How we calculate:</strong> Current file size × (number of versions - 1) × 0.8
-                          </p>
-                          <p>
-                            <strong>Why 80%?</strong> Versions are typically similar in size to the current file. We use 80% as a conservative estimate since older versions might be slightly smaller or larger depending on changes made.
-                          </p>
-                          <p>
-                            <strong>Example:</strong> A 10MB file with 5 versions = 10MB × 4 × 0.8 = <strong>~32MB</strong> in version storage
-                          </p>
-                          <p className="text-blue-900 font-medium mt-3">
-                            ⚠️ Actual space reclaimed may vary. This estimate helps prioritize which documents to clean up first.
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => setShowEstimateInfo(false)}
-                          className="mt-3 text-sm text-blue-600 hover:text-blue-800 font-medium"
-                        >
-                          Close
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {showDashboard && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                      <div className="text-sm text-blue-800">
-                        <strong>About Version Storage:</strong> All document versions are stored in the same SharePoint library as the current file. 
-                        They're accessible via the file's version history in SharePoint. When deleted, versions move to the site's Recycle Bin for 93 days before being permanently removed.
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {showDashboard && analytics.topWasters.length > 0 && (
-                  <div className="bg-white rounded-lg shadow p-4 mb-6">
-                    <h3 className="font-medium text-gray-800 mb-3">Top 5 Space Wasters</h3>
-                    <div className="space-y-2">
-                      {analytics.topWasters.map((doc, idx) => (
-                        <div
-                          key={doc.id}
-                          className="flex items-center justify-between text-sm hover:bg-gray-50 p-2 rounded transition-colors"
-                        >
-                          <div className="flex-1 truncate">
-                            <span className="text-gray-400 mr-2">{idx + 1}.</span>
-                            <button
-                              onClick={() => {
-                                // Scroll to the document in the table
-                                const element = document.getElementById(`doc-row-${doc.id}`);
-                                if (element) {
-                                  element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                  element.classList.add('bg-yellow-100');
-                                  setTimeout(() => {
-                                    element.classList.remove('bg-yellow-100');
-                                  }, 2000);
-                                }
-                              }}
-                              className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
-                            >
-                              {doc.name}
-                            </button>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            <span className="text-gray-600">{doc.versionCount} versions</span>
-                            <span className="font-semibold text-orange-600">{formatBytes(doc.estimatedVersionSpace)}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 
@@ -1042,6 +789,112 @@
                     </div>
                   </div>
                 </div>
+
+                {analytics && (
+                  <div className="mb-6">
+                    <div className="flex justify-between items-center mb-3">
+                      <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                        <BarChart className="w-5 h-5" />
+                        Storage Analytics Dashboard
+                      </h2>
+                      <button
+                        onClick={() => setShowDashboard(!showDashboard)}
+                        className="text-sm text-blue-600 hover:text-blue-800"
+                      >
+                        {showDashboard ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+
+                    {showDashboard && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                        <div className="flex items-start gap-2">
+                          <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                          <div className="text-sm text-blue-800">
+                            <strong>About Version Storage:</strong> All document versions are stored in the same SharePoint library as the current file. 
+                            They're accessible via the file's version history in SharePoint. When deleted, versions move to the site's Recycle Bin for 93 days before being permanently removed.
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {showDashboard && (
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                        <div className="bg-white rounded-lg shadow p-4">
+                          <div className="text-sm text-gray-600">Total Documents</div>
+                          <div className="text-2xl font-bold text-gray-900">{analytics.totalDocs}</div>
+                          <div className="text-xs text-gray-500 mt-1">{analytics.totalVersions} total versions</div>
+                        </div>
+                        <div className="bg-white rounded-lg shadow p-4">
+                          <div className="text-sm text-gray-600">Avg Versions/Doc</div>
+                          <div className="text-2xl font-bold text-gray-900">{analytics.avgVersionsPerDoc.toFixed(1)}</div>
+                          <div className="text-xs text-gray-500 mt-1">per document</div>
+                        </div>
+                        <div className="bg-white rounded-lg shadow p-4">
+                          <div className="text-sm text-gray-600 flex items-center gap-1">
+                            Estimated Version Storage
+                            <button
+                              onClick={() => setShowEstimateInfo(!showEstimateInfo)}
+                              className="text-blue-500 hover:text-blue-700"
+                              title="Click for info about estimates"
+                            >
+                              <InfoCircle className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <div className="text-2xl font-bold text-orange-600">{formatBytes(analytics.estimatedVersionSize)}</div>
+                          <div className="text-xs text-gray-500 mt-1">~80% of current size</div>
+                        </div>
+                        <div className="bg-white rounded-lg shadow p-4">
+                          <div className="text-sm text-gray-600 flex items-center gap-1">
+                            Selected Impact
+                            <button
+                              onClick={() => setShowEstimateInfo(!showEstimateInfo)}
+                              className="text-blue-500 hover:text-blue-700"
+                              title="Click for info about estimates"
+                            >
+                              <InfoCircle className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <div className="text-2xl font-bold text-green-600">{formatBytes(analytics.selectedSize)}</div>
+                          <div className="text-xs text-gray-500 mt-1">potential space to reclaim</div>
+                        </div>
+                      </div>
+                    )}
+
+                    {showEstimateInfo && (
+                      <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 mb-4">
+                        <div className="flex items-start gap-3">
+                          <InfoCircle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
+                          <div className="flex-1">
+                            <h4 className="font-semibold text-blue-900 mb-2">About Storage Estimates</h4>
+                            <div className="text-sm text-blue-800 space-y-2">
+                              <p>
+                                <strong>These are estimates</strong> because Microsoft doesn't provide actual version sizes through their API.
+                              </p>
+                              <p>
+                                <strong>How we calculate:</strong> Current file size × (number of versions - 1) × 0.8
+                              </p>
+                              <p>
+                                <strong>Why 80%?</strong> Versions are typically similar in size to the current file. We use 80% as a conservative estimate since older versions might be slightly smaller or larger depending on changes made.
+                              </p>
+                              <p>
+                                <strong>Example:</strong> A 10MB file with 5 versions = 10MB × 4 × 0.8 = <strong>~32MB</strong> in version storage
+                              </p>
+                              <p className="text-blue-900 font-medium mt-3">
+                                ⚠️ Actual space reclaimed may vary. This estimate helps prioritize which documents to clean up first.
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => setShowEstimateInfo(false)}
+                              className="mt-3 text-sm text-blue-600 hover:text-blue-800 font-medium"
+                            >
+                              Close
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
 
@@ -1062,7 +915,7 @@
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                                          {filteredDocs.map(doc => {
+                    {filteredDocs.map(doc => {
                       const estimatedVersionSpace = doc.size * (doc.versionCount - 1) * 0.8;
                       return (
                         <React.Fragment key={doc.id}>
