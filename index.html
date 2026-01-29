@@ -130,7 +130,7 @@
       const CLIENT_ID = 'b2412250-afe8-4ce4-b723-e463d309e2bd';
       const TENANT_ID = '2cc0500a-7eba-4d4c-abb5-944473559b47';
       const REDIRECT_URI = window.location.origin + window.location.pathname;
-      const SCOPES = ['Sites.Read.All', 'Files.ReadWrite.All', 'User.Read'];
+      const SCOPES = ['Sites.FullControl.All', 'Files.ReadWrite.All', 'User.Read'];
 
       const login = () => {
         const authUrl = `https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/authorize?` +
