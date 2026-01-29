@@ -102,7 +102,30 @@
       const [sortBy, setSortBy] = useState('versionCount');
       const [showDashboard, setShowDashboard] = useState(true);
       const [showEstimateInfo, setShowEstimateInfo] = useState(false);
-      const [deletedDocs, setDeletedDocs] = useState(new Set());
+      const [deletedVersionInfo, setDeletedVersionInfo] = useState({});
+
+      // Sync scroll between top and bottom scrollbars
+      useEffect(() => {
+        const topScroll = document.getElementById('top-scroll');
+        const bottomScroll = document.getElementById('bottom-scroll');
+        
+        if (topScroll && bottomScroll) {
+          const syncScroll = (source, target) => {
+            target.scrollLeft = source.scrollLeft;
+          };
+          
+          const handleTopScroll = () => syncScroll(topScroll, bottomScroll);
+          const handleBottomScroll = () => syncScroll(bottomScroll, topScroll);
+          
+          topScroll.addEventListener('scroll', handleTopScroll);
+          bottomScroll.addEventListener('scroll', handleBottomScroll);
+          
+          return () => {
+            topScroll.removeEventListener('scroll', handleTopScroll);
+            bottomScroll.removeEventListener('scroll', handleBottomScroll);
+          };
+        }
+      }, [filteredDocs]);
 
       const CLIENT_ID = 'b2412250-afe8-4ce4-b723-e463d309e2bd';
       const TENANT_ID = '2cc0500a-7eba-4d4c-abb5-944473559b47';
@@ -321,9 +344,9 @@
         return docs;
       };
 
+      // Filter and sort documents
       useEffect(() => {
         let filtered = documents.filter(doc =>
-          doc.versionCount >= minVersions &&
           (doc.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
            doc.library.toLowerCase().includes(searchTerm.toLowerCase()) ||
            (doc.folderPath && doc.folderPath.toLowerCase().includes(searchTerm.toLowerCase())))
@@ -342,7 +365,7 @@
         });
 
         setFilteredDocs(filtered);
-      }, [searchTerm, minVersions, documents, sortBy]);
+      }, [searchTerm, documents, sortBy]);
 
       const bulkSelectByVersions = (minVers) => {
         const toSelect = filteredDocs.filter(doc => doc.versionCount >= minVers).map(d => d.id);
@@ -911,8 +934,15 @@
             )}
 
             {filteredDocs.length > 0 && (
-              <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
+              <div className="bg-white rounded-lg shadow overflow-hidden">
+                {/* Top scrollbar */}
+                <div id="top-scroll" className="overflow-x-auto" style={{ overflowY: 'hidden', height: '20px' }}>
+                  <div style={{ width: '2000px', height: '1px' }}></div>
+                </div>
+                
+                {/* Main table with bottom scrollbar */}
+                <div id="bottom-scroll" className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="px-3 py-3"></th>
@@ -1052,6 +1082,7 @@
                     })}
                   </tbody>
                 </table>
+              </div>
               </div>
             )}
 
