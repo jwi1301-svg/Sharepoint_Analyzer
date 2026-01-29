@@ -102,6 +102,7 @@
       const [sortBy, setSortBy] = useState('versionCount');
       const [showDashboard, setShowDashboard] = useState(true);
       const [showEstimateInfo, setShowEstimateInfo] = useState(false);
+      const [deletedDocs, setDeletedDocs] = useState(new Set());
 
       const CLIENT_ID = 'b2412250-afe8-4ce4-b723-e463d309e2bd';
       const TENANT_ID = '2cc0500a-7eba-4d4c-abb5-944473559b47';
@@ -480,12 +481,15 @@
           }
           alert(`Successfully deleted ${successCount} version(s)`);
           setSelectedVersions(prev => ({ ...prev, [docId]: new Set() }));
-          setScanCache(prev => {
-            const newCache = { ...prev };
-            delete newCache[siteUrl];
-            return newCache;
-          });
-          analyzeSite(true);
+          setDeletedDocs(prev => new Set([...prev, docId]));
+          
+          // Update the document in state to reflect version deletion
+          setDocuments(prevDocs => prevDocs.map(d => {
+            if (d.id === docId) {
+              return { ...d, versionCount: 1, versions: d.versions.slice(0, 1) };
+            }
+            return d;
+          }));
         } catch (err) {
           console.error(`Failed to delete versions for ${doc.name}:`, err);
           alert(`Error deleting versions. Deleted ${successCount} before error.`);
@@ -523,12 +527,20 @@
           }
           alert(`Successfully deleted ${successCount} version(s)`);
           setSelectedVersions({});
-          setScanCache(prev => {
-            const newCache = { ...prev };
-            delete newCache[siteUrl];
-            return newCache;
-          });
-          analyzeSite(true);
+          
+          // Mark all affected documents as deleted
+          const affectedDocIds = Object.keys(selectedVersions).filter(id => selectedVersions[id]?.size > 0);
+          setDeletedDocs(prev => new Set([...prev, ...affectedDocIds]));
+          
+          // Update documents in state to reflect version deletion
+          setDocuments(prevDocs => prevDocs.map(d => {
+            if (affectedDocIds.includes(d.id)) {
+              const deletedVersionIds = selectedVersions[d.id];
+              const remainingVersions = d.versions.filter(v => !deletedVersionIds.has(v.id));
+              return { ...d, versionCount: remainingVersions.length, versions: remainingVersions };
+            }
+            return d;
+          }));
         } catch (err) {
           console.error('Failed to delete versions:', err);
           alert(`Error deleting versions. Deleted ${successCount} before error.`);
@@ -919,7 +931,7 @@
                       const estimatedVersionSpace = doc.size * (doc.versionCount - 1) * 0.8;
                       return (
                         <React.Fragment key={doc.id}>
-                          <tr id={`doc-row-${doc.id}`} className="hover:bg-gray-50 transition-colors duration-200">
+                          <tr id={`doc-row-${doc.id}`} className={`hover:bg-gray-50 transition-colors duration-200 ${deletedDocs.has(doc.id) ? 'bg-green-50' : ''}`}>
                             <td className="px-3 py-4">
                               <button
                                 onClick={() => toggleExpand(doc.id)}
@@ -940,7 +952,14 @@
                                 className="w-4 h-4 text-blue-600 rounded"
                               />
                             </td>
-                            <td className="px-6 py-4 text-sm text-gray-900 font-medium">{doc.name}</td>
+                            <td className="px-6 py-4 text-sm text-gray-900 font-medium">
+                              {doc.name}
+                              {deletedDocs.has(doc.id) && (
+                                <span className="ml-2 inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">
+                                  ✓ Versions Deleted
+                                </span>
+                              )}
+                            </td>
                             <td className="px-6 py-4 text-sm text-gray-600">{doc.library}</td>
                             <td className="px-6 py-4 text-sm text-gray-600">
                               <span className="font-mono text-xs">{doc.folderPath || '/'}</span>
