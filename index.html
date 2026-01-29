@@ -249,12 +249,24 @@
           
           setProgressStats({ current: 0, total: drivesData.value.length, found: 0 });
           
-          const drivePromises = drivesData.value.map((drive, index) => 
-            fetchDocumentsFromDriveParallel(siteId, drive.id, drive.name, index, drivesData.value.length)
-          );
-
-          const allDocsArrays = await Promise.all(drivePromises);
-          const allDocs = allDocsArrays.flat();
+          // Process drives in batches to avoid overwhelming SharePoint
+          const batchSize = 4; // Process 4 libraries at a time
+          const allDocs = [];
+          
+          for (let i = 0; i < drivesData.value.length; i += batchSize) {
+            const batch = drivesData.value.slice(i, i + batchSize);
+            const drivePromises = batch.map((drive, batchIndex) => 
+              fetchDocumentsFromDriveParallel(siteId, drive.id, drive.name, i + batchIndex, drivesData.value.length)
+            );
+            
+            const batchResults = await Promise.all(drivePromises);
+            allDocs.push(...batchResults.flat());
+            
+            // Small delay between batches to give SharePoint breathing room
+            if (i + batchSize < drivesData.value.length) {
+              await new Promise(resolve => setTimeout(resolve, 800));
+            }
+          }
 
           const filteredForCache = allDocs.filter(doc => doc.versionCount >= 1);
 
