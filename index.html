@@ -68,12 +68,14 @@
       const [filteredDocs, setFilteredDocs] = useState([]);
       const [loading, setLoading] = useState(false);
       const [loadingStatus, setLoadingStatus] = useState('');
+      const [progressStats, setProgressStats] = useState({ current: 0, total: 0, found: 0 });
       const [searchTerm, setSearchTerm] = useState('');
-      const [minVersions, setMinVersions] = useState(1);
+      const [minVersions, setMinVersions] = useState(2);
       const [selectedDocs, setSelectedDocs] = useState(new Set());
       const [error, setError] = useState(null);
       const [expandedDocs, setExpandedDocs] = useState(new Set());
       const [selectedVersions, setSelectedVersions] = useState({});
+      const [scanCache, setScanCache] = useState({});
 
       // Azure AD Configuration
       const CLIENT_ID = 'b2412250-afe8-4ce4-b723-e463d309e2bd';
@@ -99,6 +101,7 @@
         setUserInfo(null);
         setDocuments([]);
         setFilteredDocs([]);
+        setScanCache({});
       };
 
       // Handle OAuth redirect
@@ -127,10 +130,17 @@
         }
       };
 
-      // Analyze SharePoint site
-      const analyzeSite = async () => {
+      // Analyze SharePoint site with caching
+      const analyzeSite = async (forceRefresh = false) => {
         if (!siteUrl.trim()) {
           setError('Please enter a SharePoint site URL');
+          return;
+        }
+
+        // Check cache first
+        if (!forceRefresh && scanCache[siteUrl]) {
+          setDocuments(scanCache[siteUrl]);
+          setFilteredDocs(scanCache[siteUrl]);
           return;
         }
 
@@ -138,14 +148,13 @@
         setLoadingStatus('Connecting to SharePoint site...');
         setError(null);
         setDocuments([]);
+        setProgressStats({ current: 0, total: 0, found: 0 });
 
         try {
-          // Parse site URL to get site path
           const url = new URL(siteUrl);
           const hostname = url.hostname;
           const sitePath = url.pathname;
 
-          // Get site ID
           const siteResponse = await fetch(
             `https://graph.microsoft.com/v1.0/sites/${hostname}:${sitePath}`,
             { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -156,7 +165,6 @@
           const siteData = await siteResponse.json();
           const siteId = siteData.id;
 
-          // Get all document libraries
           setLoadingStatus('Fetching document libraries...');
           const drivesResponse = await fetch(
             `https://graph.microsoft.com/v1.0/sites/${siteId}/drives`,
@@ -164,23 +172,32 @@
           );
 
           const drivesData = await drivesResponse.json();
-          const allDocs = [];
+          
+          // PARALLEL PROCESSING: Process all drives concurrently
+          setProgressStats({ current: 0, total: drivesData.value.length, found: 0 });
+          
+          const drivePromises = drivesData.value.map((drive, index) => 
+            fetchDocumentsFromDriveParallel(siteId, drive.id, drive.name, index, drivesData.value.length)
+          );
 
-          // Fetch documents from each library
-          for (let i = 0; i < drivesData.value.length; i++) {
-            const drive = drivesData.value[i];
-            setLoadingStatus(`Scanning library ${i + 1}/${drivesData.value.length}: ${drive.name}...`);
-            const docs = await fetchDocumentsFromDrive(siteId, drive.id, drive.name);
-            allDocs.push(...docs);
-          }
+          const allDocsArrays = await Promise.all(drivePromises);
+          const allDocs = allDocsArrays.flat();
 
-          setDocuments(allDocs);
-          setFilteredDocs(allDocs);
+          // Filter to only show documents with multiple versions (based on minVersions filter)
+          const filteredForCache = allDocs.filter(doc => doc.versionCount >= 1);
+
+          setDocuments(filteredForCache);
+          setFilteredDocs(filteredForCache);
+          
+          // Cache the results
+          setScanCache(prev => ({ ...prev, [siteUrl]: filteredForCache }));
+          
         } catch (err) {
           setError(err.message);
         } finally {
           setLoading(false);
           setLoadingStatus('');
+          setProgressStats({ current: 0, total: 0, found: 0 });
         }
       };
 
@@ -197,15 +214,14 @@
             allItems = allItems.concat(data.value);
           }
 
-          // Check for pagination - continue fetching if there are more pages
           nextLink = data['@odata.nextLink'] || null;
         }
 
         return allItems;
       };
 
-      // Recursively fetch all documents from a folder and its subfolders
-      const fetchDocumentsRecursively = async (driveId, itemId, libraryName, folderPath = '') => {
+      // Recursively fetch all documents from a folder and its subfolders (PARALLEL VERSION)
+      const fetchDocumentsRecursivelyParallel = async (driveId, itemId, libraryName, folderPath = '') => {
         try {
           const baseUrl = itemId
             ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/children?$expand=listItem($expand=versions)`
@@ -214,29 +230,41 @@
           const items = await fetchAllPages(baseUrl, { Authorization: `Bearer ${accessToken}` });
 
           let allDocs = [];
+          const folderPromises = [];
 
           for (const item of items) {
             if (item.file) {
-              // It's a file - add to results
-              allDocs.push({
-                id: item.id,
-                name: item.name,
-                path: item.webUrl,
-                folderPath: folderPath || '/',
-                library: libraryName,
-                size: item.size,
-                versionCount: item.listItem?.versions?.length || 1,
-                versions: item.listItem?.versions || [],
-                driveId: driveId,
-                itemId: item.id
-              });
+              // Filter at API level - only include if has multiple versions
+              const versionCount = item.listItem?.versions?.length || 1;
+              if (versionCount >= minVersions) {
+                allDocs.push({
+                  id: item.id,
+                  name: item.name,
+                  path: item.webUrl,
+                  folderPath: folderPath || '/',
+                  library: libraryName,
+                  size: item.size,
+                  versionCount: versionCount,
+                  versions: item.listItem?.versions || [],
+                  driveId: driveId,
+                  itemId: item.id
+                });
+                
+                // Update found count
+                setProgressStats(prev => ({ ...prev, found: prev.found + 1 }));
+              }
             } else if (item.folder) {
-              // It's a folder - recursively fetch its contents
+              // Process subfolders in parallel
               const subFolderPath = folderPath ? `${folderPath}/${item.name}` : `/${item.name}`;
-              const subDocs = await fetchDocumentsRecursively(driveId, item.id, libraryName, subFolderPath);
-              allDocs = allDocs.concat(subDocs);
+              folderPromises.push(
+                fetchDocumentsRecursivelyParallel(driveId, item.id, libraryName, subFolderPath)
+              );
             }
           }
+
+          // Wait for all subfolders to complete
+          const subfolderResults = await Promise.all(folderPromises);
+          allDocs = allDocs.concat(...subfolderResults);
 
           return allDocs;
         } catch (err) {
@@ -245,8 +273,11 @@
         }
       };
 
-      const fetchDocumentsFromDrive = async (siteId, driveId, libraryName) => {
-        return fetchDocumentsRecursively(driveId, null, libraryName);
+      const fetchDocumentsFromDriveParallel = async (siteId, driveId, libraryName, index, total) => {
+        setLoadingStatus(`Scanning library ${index + 1}/${total}: ${libraryName}...`);
+        const docs = await fetchDocumentsRecursivelyParallel(driveId, null, libraryName);
+        setProgressStats(prev => ({ ...prev, current: prev.current + 1 }));
+        return docs;
       };
 
       // Filter documents
@@ -306,7 +337,6 @@
       const selectAllVersions = (docId) => {
         const doc = documents.find(d => d.id === docId);
         if (!doc || !doc.versions) return;
-        // Select all versions except the current one (first one is current)
         const versionIds = doc.versions.slice(1).map(v => v.id);
         setSelectedVersions(prev => ({
           ...prev,
@@ -330,7 +360,7 @@
       const deleteVersions = async () => {
         if (selectedDocs.size === 0) return;
 
-        if (!confirm(`Delete version history for ${selectedDocs.size} document(s)?`)) return;
+        if (!confirm(`Delete ALL version history for ${selectedDocs.size} document(s)? This will move versions to the SharePoint Recycle Bin.`)) return;
 
         setLoading(true);
         let successCount = 0;
@@ -355,9 +385,16 @@
           }
         }
 
-        alert(`Successfully cleaned ${successCount} document(s)`);
+        alert(`Successfully deleted version history for ${successCount} document(s). Versions moved to Recycle Bin.`);
         setSelectedDocs(new Set());
-        analyzeSite();
+        
+        // Clear cache and refresh
+        setScanCache(prev => {
+          const newCache = { ...prev };
+          delete newCache[siteUrl];
+          return newCache;
+        });
+        analyzeSite(true);
         setLoading(false);
       };
 
@@ -368,7 +405,7 @@
 
         if (!doc || !versionIds || versionIds.size === 0) return;
 
-        if (!confirm(`Delete ${versionIds.size} selected version(s) for "${doc.name}"?`)) return;
+        if (!confirm(`Delete ${versionIds.size} selected version(s) for "${doc.name}"? Versions will be moved to the SharePoint Recycle Bin.`)) return;
 
         setLoading(true);
         let successCount = 0;
@@ -384,9 +421,16 @@
             );
             successCount++;
           }
-          alert(`Successfully deleted ${successCount} version(s)`);
+          alert(`Successfully deleted ${successCount} version(s). Moved to Recycle Bin.`);
           setSelectedVersions(prev => ({ ...prev, [docId]: new Set() }));
-          analyzeSite();
+          
+          // Clear cache and refresh
+          setScanCache(prev => {
+            const newCache = { ...prev };
+            delete newCache[siteUrl];
+            return newCache;
+          });
+          analyzeSite(true);
         } catch (err) {
           console.error(`Failed to delete versions for ${doc.name}:`, err);
           alert(`Error deleting versions. Deleted ${successCount} before error.`);
@@ -400,7 +444,7 @@
         const totalVersions = getTotalSelectedVersionsCount();
         if (totalVersions === 0) return;
 
-        if (!confirm(`Delete ${totalVersions} selected version(s) across all documents?`)) return;
+        if (!confirm(`Delete ${totalVersions} selected version(s) across all documents? Versions will be moved to the SharePoint Recycle Bin.`)) return;
 
         setLoading(true);
         let successCount = 0;
@@ -423,9 +467,16 @@
               successCount++;
             }
           }
-          alert(`Successfully deleted ${successCount} version(s)`);
+          alert(`Successfully deleted ${successCount} version(s). Moved to Recycle Bin.`);
           setSelectedVersions({});
-          analyzeSite();
+          
+          // Clear cache and refresh
+          setScanCache(prev => {
+            const newCache = { ...prev };
+            delete newCache[siteUrl];
+            return newCache;
+          });
+          analyzeSite(true);
         } catch (err) {
           console.error('Failed to delete versions:', err);
           alert(`Error deleting versions. Deleted ${successCount} before error.`);
@@ -505,18 +556,34 @@
                   className="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
                 <button
-                  onClick={analyzeSite}
+                  onClick={() => analyzeSite(false)}
                   disabled={loading}
                   className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg flex items-center gap-2 transition-colors"
                 >
                   {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                   Analyze
                 </button>
+                {scanCache[siteUrl] && !loading && (
+                  <button
+                    onClick={() => analyzeSite(true)}
+                    className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg flex items-center gap-2 transition-colors"
+                    title="Refresh scan results"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    Refresh
+                  </button>
+                )}
               </div>
               {error && (
                 <div className="mt-3 text-red-600 text-sm flex items-center gap-2">
                   <AlertCircle className="w-4 h-4" />
                   {error}
+                </div>
+              )}
+              {scanCache[siteUrl] && !loading && (
+                <div className="mt-3 text-green-600 text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4" />
+                  Using cached results. Click "Refresh" to rescan.
                 </div>
               )}
             </div>
@@ -532,7 +599,7 @@
                       type="text"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      placeholder="Search by name or library..."
+                      placeholder="Search by name, library, or folder..."
                       className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
@@ -788,15 +855,32 @@
             {loading && documents.length === 0 && (
               <div className="bg-white rounded-lg shadow p-12 text-center">
                 <RefreshCw className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
-                <p className="text-gray-600">{loadingStatus || 'Analyzing SharePoint site...'}</p>
-                <p className="text-gray-400 text-sm mt-2">Scanning all folders and subfolders...</p>
+                <p className="text-gray-600 font-medium">{loadingStatus || 'Analyzing SharePoint site...'}</p>
+                {progressStats.total > 0 && (
+                  <div className="mt-4">
+                    <div className="text-sm text-gray-500">
+                      Libraries scanned: {progressStats.current} / {progressStats.total}
+                    </div>
+                    <div className="text-sm text-blue-600 font-medium mt-1">
+                      Documents with multiple versions found: {progressStats.found}
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2 mt-3">
+                      <div 
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${(progressStats.current / progressStats.total) * 100}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                )}
+                <p className="text-gray-400 text-sm mt-4">Using parallel processing for faster scanning...</p>
               </div>
             )}
 
             {!loading && documents.length === 0 && siteUrl && (
               <div className="bg-white rounded-lg shadow p-12 text-center">
                 <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-600">No documents found</p>
+                <p className="text-gray-600">No documents with multiple versions found</p>
+                <p className="text-gray-400 text-sm mt-2">Try lowering the minimum versions filter</p>
               </div>
             )}
           </div>
