@@ -77,6 +77,12 @@
       </svg>
     );
 
+    const InfoCircle = ({ className }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    );
+
     const SharePointVersionAnalyzer = () => {
       const [isAuthenticated, setIsAuthenticated] = useState(false);
       const [accessToken, setAccessToken] = useState(null);
@@ -96,6 +102,7 @@
       const [scanCache, setScanCache] = useState({});
       const [sortBy, setSortBy] = useState('versionCount');
       const [showDashboard, setShowDashboard] = useState(true);
+      const [showEstimateInfo, setShowEstimateInfo] = useState(false);
 
       // Azure AD Configuration
       const CLIENT_ID = 'b2412250-afe8-4ce4-b723-e463d309e2bd';
@@ -169,7 +176,7 @@
             estimatedVersionSpace: doc.size * (doc.versionCount - 1) * 0.8
           }))
           .sort((a, b) => b.estimatedVersionSpace - a.estimatedVersionSpace)
-          .slice(0, 10);
+          .slice(0, 5);
 
         return {
           totalSize,
@@ -806,14 +813,66 @@
                       <div className="text-xs text-gray-500 mt-1">per document</div>
                     </div>
                     <div className="bg-white rounded-lg shadow p-4">
-                      <div className="text-sm text-gray-600">Estimated Version Storage</div>
+                      <div className="text-sm text-gray-600 flex items-center gap-1">
+                        Estimated Version Storage
+                        <button
+                          onClick={() => setShowEstimateInfo(!showEstimateInfo)}
+                          className="text-blue-500 hover:text-blue-700"
+                          title="Click for info about estimates"
+                        >
+                          <InfoCircle className="w-4 h-4" />
+                        </button>
+                      </div>
                       <div className="text-2xl font-bold text-orange-600">{formatBytes(analytics.estimatedVersionSize)}</div>
                       <div className="text-xs text-gray-500 mt-1">~80% of current size</div>
                     </div>
                     <div className="bg-white rounded-lg shadow p-4">
-                      <div className="text-sm text-gray-600">Selected Impact</div>
+                      <div className="text-sm text-gray-600 flex items-center gap-1">
+                        Selected Impact
+                        <button
+                          onClick={() => setShowEstimateInfo(!showEstimateInfo)}
+                          className="text-blue-500 hover:text-blue-700"
+                          title="Click for info about estimates"
+                        >
+                          <InfoCircle className="w-4 h-4" />
+                        </button>
+                      </div>
                       <div className="text-2xl font-bold text-green-600">{formatBytes(analytics.selectedSize)}</div>
                       <div className="text-xs text-gray-500 mt-1">potential space to reclaim</div>
+                    </div>
+                  </div>
+                )}
+
+                {showEstimateInfo && (
+                  <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 mb-4">
+                    <div className="flex items-start gap-3">
+                      <InfoCircle className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-blue-900 mb-2">About Storage Estimates</h4>
+                        <div className="text-sm text-blue-800 space-y-2">
+                          <p>
+                            <strong>These are estimates</strong> because Microsoft doesn't provide actual version sizes through their API.
+                          </p>
+                          <p>
+                            <strong>How we calculate:</strong> Current file size × (number of versions - 1) × 0.8
+                          </p>
+                          <p>
+                            <strong>Why 80%?</strong> Versions are typically similar in size to the current file. We use 80% as a conservative estimate since older versions might be slightly smaller or larger depending on changes made.
+                          </p>
+                          <p>
+                            <strong>Example:</strong> A 10MB file with 5 versions = 10MB × 4 × 0.8 = <strong>~32MB</strong> in version storage
+                          </p>
+                          <p className="text-blue-900 font-medium mt-3">
+                            ⚠️ Actual space reclaimed may vary. This estimate helps prioritize which documents to clean up first.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setShowEstimateInfo(false)}
+                          className="mt-3 text-sm text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                          Close
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -832,25 +891,37 @@
 
                 {showDashboard && analytics.topWasters.length > 0 && (
                   <div className="bg-white rounded-lg shadow p-4 mb-6">
-                    <h3 className="font-medium text-gray-800 mb-3">Top 10 Space Wasters</h3>
+                    <h3 className="font-medium text-gray-800 mb-3">Top 5 Space Wasters</h3>
                     <div className="space-y-2">
                       {analytics.topWasters.map((doc, idx) => (
-                        <a
+                        <div
                           key={doc.id}
-                          href={doc.path}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center justify-between text-sm hover:bg-gray-50 p-2 rounded transition-colors cursor-pointer"
+                          className="flex items-center justify-between text-sm hover:bg-gray-50 p-2 rounded transition-colors"
                         >
                           <div className="flex-1 truncate">
                             <span className="text-gray-400 mr-2">{idx + 1}.</span>
-                            <span className="text-blue-600 hover:text-blue-800 hover:underline">{doc.name}</span>
+                            <button
+                              onClick={() => {
+                                // Scroll to the document in the table
+                                const element = document.getElementById(`doc-row-${doc.id}`);
+                                if (element) {
+                                  element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                  element.classList.add('bg-yellow-100');
+                                  setTimeout(() => {
+                                    element.classList.remove('bg-yellow-100');
+                                  }, 2000);
+                                }
+                              }}
+                              className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                            >
+                              {doc.name}
+                            </button>
                           </div>
                           <div className="flex items-center gap-4">
                             <span className="text-gray-600">{doc.versionCount} versions</span>
                             <span className="font-semibold text-orange-600">{formatBytes(doc.estimatedVersionSpace)}</span>
                           </div>
-                        </a>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -991,11 +1062,11 @@
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredDocs.map(doc => {
+                                          {filteredDocs.map(doc => {
                       const estimatedVersionSpace = doc.size * (doc.versionCount - 1) * 0.8;
                       return (
                         <React.Fragment key={doc.id}>
-                          <tr className="hover:bg-gray-50">
+                          <tr id={`doc-row-${doc.id}`} className="hover:bg-gray-50 transition-colors duration-200">
                             <td className="px-3 py-4">
                               <button
                                 onClick={() => toggleExpand(doc.id)}
