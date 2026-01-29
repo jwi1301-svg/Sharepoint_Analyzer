@@ -59,6 +59,24 @@
       </svg>
     );
 
+    const Download = ({ className }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+      </svg>
+    );
+
+    const BarChart = ({ className }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+      </svg>
+    );
+
+    const Zap = ({ className }) => (
+      <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+    );
+
     const SharePointVersionAnalyzer = () => {
       const [isAuthenticated, setIsAuthenticated] = useState(false);
       const [accessToken, setAccessToken] = useState(null);
@@ -76,6 +94,8 @@
       const [expandedDocs, setExpandedDocs] = useState(new Set());
       const [selectedVersions, setSelectedVersions] = useState({});
       const [scanCache, setScanCache] = useState({});
+      const [sortBy, setSortBy] = useState('versionCount');
+      const [showDashboard, setShowDashboard] = useState(true);
 
       // Azure AD Configuration
       const CLIENT_ID = 'b2412250-afe8-4ce4-b723-e463d309e2bd';
@@ -130,6 +150,38 @@
         }
       };
 
+      // Calculate storage analytics
+      const getStorageAnalytics = () => {
+        const totalSize = documents.reduce((sum, doc) => sum + doc.size, 0);
+        const totalVersions = documents.reduce((sum, doc) => sum + doc.versionCount, 0);
+        const estimatedVersionSize = totalSize * 0.8; // Rough estimate: versions ~80% of current size
+        const avgVersionsPerDoc = documents.length > 0 ? totalVersions / documents.length : 0;
+        
+        // Estimate space to reclaim from selected docs
+        const selectedSize = documents
+          .filter(doc => selectedDocs.has(doc.id))
+          .reduce((sum, doc) => sum + (doc.size * (doc.versionCount - 1) * 0.8), 0);
+
+        // Top space wasters
+        const topWasters = [...documents]
+          .map(doc => ({
+            ...doc,
+            estimatedVersionSpace: doc.size * (doc.versionCount - 1) * 0.8
+          }))
+          .sort((a, b) => b.estimatedVersionSpace - a.estimatedVersionSpace)
+          .slice(0, 10);
+
+        return {
+          totalSize,
+          totalVersions,
+          estimatedVersionSize,
+          avgVersionsPerDoc,
+          selectedSize,
+          topWasters,
+          totalDocs: documents.length
+        };
+      };
+
       // Analyze SharePoint site with caching
       const analyzeSite = async (forceRefresh = false) => {
         if (!siteUrl.trim()) {
@@ -137,7 +189,6 @@
           return;
         }
 
-        // Check cache first
         if (!forceRefresh && scanCache[siteUrl]) {
           setDocuments(scanCache[siteUrl]);
           setFilteredDocs(scanCache[siteUrl]);
@@ -173,7 +224,6 @@
 
           const drivesData = await drivesResponse.json();
           
-          // PARALLEL PROCESSING: Process all drives concurrently
           setProgressStats({ current: 0, total: drivesData.value.length, found: 0 });
           
           const drivePromises = drivesData.value.map((drive, index) => 
@@ -183,13 +233,10 @@
           const allDocsArrays = await Promise.all(drivePromises);
           const allDocs = allDocsArrays.flat();
 
-          // Filter to only show documents with multiple versions (based on minVersions filter)
           const filteredForCache = allDocs.filter(doc => doc.versionCount >= 1);
 
           setDocuments(filteredForCache);
           setFilteredDocs(filteredForCache);
-          
-          // Cache the results
           setScanCache(prev => ({ ...prev, [siteUrl]: filteredForCache }));
           
         } catch (err) {
@@ -201,7 +248,6 @@
         }
       };
 
-      // Helper function to fetch all pages from a paginated API response
       const fetchAllPages = async (initialUrl, headers) => {
         let allItems = [];
         let nextLink = initialUrl;
@@ -220,7 +266,6 @@
         return allItems;
       };
 
-      // Recursively fetch all documents from a folder and its subfolders (PARALLEL VERSION)
       const fetchDocumentsRecursivelyParallel = async (driveId, itemId, libraryName, folderPath = '') => {
         try {
           const baseUrl = itemId
@@ -234,7 +279,6 @@
 
           for (const item of items) {
             if (item.file) {
-              // Filter at API level - only include if has multiple versions
               const versionCount = item.listItem?.versions?.length || 1;
               if (versionCount >= minVersions) {
                 allDocs.push({
@@ -250,11 +294,9 @@
                   itemId: item.id
                 });
                 
-                // Update found count
                 setProgressStats(prev => ({ ...prev, found: prev.found + 1 }));
               }
             } else if (item.folder) {
-              // Process subfolders in parallel
               const subFolderPath = folderPath ? `${folderPath}/${item.name}` : `/${item.name}`;
               folderPromises.push(
                 fetchDocumentsRecursivelyParallel(driveId, item.id, libraryName, subFolderPath)
@@ -262,7 +304,6 @@
             }
           }
 
-          // Wait for all subfolders to complete
           const subfolderResults = await Promise.all(folderPromises);
           allDocs = allDocs.concat(...subfolderResults);
 
@@ -280,7 +321,7 @@
         return docs;
       };
 
-      // Filter documents
+      // Filter and sort documents
       useEffect(() => {
         let filtered = documents.filter(doc =>
           doc.versionCount >= minVersions &&
@@ -288,10 +329,172 @@
            doc.library.toLowerCase().includes(searchTerm.toLowerCase()) ||
            (doc.folderPath && doc.folderPath.toLowerCase().includes(searchTerm.toLowerCase())))
         );
-        setFilteredDocs(filtered);
-      }, [searchTerm, minVersions, documents]);
 
-      // Selection handlers
+        // Sort based on selected criteria
+        filtered.sort((a, b) => {
+          if (sortBy === 'versionCount') return b.versionCount - a.versionCount;
+          if (sortBy === 'size') return b.size - a.size;
+          if (sortBy === 'spaceImpact') {
+            const aImpact = a.size * (a.versionCount - 1);
+            const bImpact = b.size * (b.versionCount - 1);
+            return bImpact - aImpact;
+          }
+          if (sortBy === 'name') return a.name.localeCompare(b.name);
+          return 0;
+        });
+
+        setFilteredDocs(filtered);
+      }, [searchTerm, minVersions, documents, sortBy]);
+
+      // Bulk selection filters
+      const bulkSelectByVersions = (minVers) => {
+        const toSelect = filteredDocs.filter(doc => doc.versionCount >= minVers).map(d => d.id);
+        setSelectedDocs(new Set(toSelect));
+      };
+
+      const bulkSelectBySize = (minSizeMB) => {
+        const minBytes = minSizeMB * 1024 * 1024;
+        const toSelect = filteredDocs.filter(doc => doc.size >= minBytes).map(d => d.id);
+        setSelectedDocs(new Set(toSelect));
+      };
+
+      const bulkSelectByAge = (monthsOld) => {
+        const cutoffDate = new Date();
+        cutoffDate.setMonth(cutoffDate.getMonth() - monthsOld);
+        
+        const toSelect = filteredDocs.filter(doc => {
+          if (!doc.versions || doc.versions.length <= 1) return false;
+          const oldestVersion = doc.versions[doc.versions.length - 1];
+          const versionDate = new Date(oldestVersion.lastModifiedDateTime);
+          return versionDate < cutoffDate;
+        }).map(d => d.id);
+        
+        setSelectedDocs(new Set(toSelect));
+      };
+
+      // Quick action: Keep only X versions
+      const keepOnlyXVersions = async (keepCount) => {
+        if (selectedDocs.size === 0) {
+          alert('Please select documents first');
+          return;
+        }
+
+        if (!confirm(`Delete all but the last ${keepCount} version(s) for ${selectedDocs.size} document(s)?`)) return;
+
+        setLoading(true);
+        let successCount = 0;
+
+        for (const docId of selectedDocs) {
+          const doc = documents.find(d => d.id === docId);
+          if (!doc || doc.versions.length <= keepCount) continue;
+
+          try {
+            const versionsToDelete = doc.versions.slice(keepCount);
+            for (const version of versionsToDelete) {
+              await fetch(
+                `https://graph.microsoft.com/v1.0/drives/${doc.driveId}/items/${doc.itemId}/versions/${version.id}`,
+                {
+                  method: 'DELETE',
+                  headers: { Authorization: `Bearer ${accessToken}` }
+                }
+              );
+            }
+            successCount++;
+          } catch (err) {
+            console.error(`Failed to delete versions for ${doc.name}:`, err);
+          }
+        }
+
+        alert(`Successfully processed ${successCount} document(s)`);
+        setSelectedDocs(new Set());
+        setScanCache(prev => {
+          const newCache = { ...prev };
+          delete newCache[siteUrl];
+          return newCache;
+        });
+        analyzeSite(true);
+        setLoading(false);
+      };
+
+      // Quick action: Delete versions older than X months
+      const deleteVersionsOlderThan = async (monthsOld) => {
+        if (selectedDocs.size === 0) {
+          alert('Please select documents first');
+          return;
+        }
+
+        const cutoffDate = new Date();
+        cutoffDate.setMonth(cutoffDate.getMonth() - monthsOld);
+
+        if (!confirm(`Delete versions older than ${monthsOld} months for ${selectedDocs.size} document(s)?`)) return;
+
+        setLoading(true);
+        let successCount = 0;
+        let versionsDeleted = 0;
+
+        for (const docId of selectedDocs) {
+          const doc = documents.find(d => d.id === docId);
+          if (!doc) continue;
+
+          try {
+            for (const version of doc.versions.slice(1)) {
+              const versionDate = new Date(version.lastModifiedDateTime);
+              if (versionDate < cutoffDate) {
+                await fetch(
+                  `https://graph.microsoft.com/v1.0/drives/${doc.driveId}/items/${doc.itemId}/versions/${version.id}`,
+                  {
+                    method: 'DELETE',
+                    headers: { Authorization: `Bearer ${accessToken}` }
+                  }
+                );
+                versionsDeleted++;
+              }
+            }
+            successCount++;
+          } catch (err) {
+            console.error(`Failed to delete versions for ${doc.name}:`, err);
+          }
+        }
+
+        alert(`Successfully processed ${successCount} document(s). Deleted ${versionsDeleted} old versions.`);
+        setSelectedDocs(new Set());
+        setScanCache(prev => {
+          const newCache = { ...prev };
+          delete newCache[siteUrl];
+          return newCache;
+        });
+        analyzeSite(true);
+        setLoading(false);
+      };
+
+      // Export to CSV
+      const exportToCSV = () => {
+        const analytics = getStorageAnalytics();
+        
+        let csv = 'SharePoint Version Analysis Report\n\n';
+        csv += 'Summary Statistics\n';
+        csv += `Total Documents,${analytics.totalDocs}\n`;
+        csv += `Total Versions,${analytics.totalVersions}\n`;
+        csv += `Average Versions per Document,${analytics.avgVersionsPerDoc.toFixed(2)}\n`;
+        csv += `Total Size,${formatBytes(analytics.totalSize)}\n`;
+        csv += `Estimated Version Storage,${formatBytes(analytics.estimatedVersionSize)}\n\n`;
+        
+        csv += 'Document Name,Library,Folder Path,Versions,Size,Estimated Version Space,Web URL\n';
+        
+        filteredDocs.forEach(doc => {
+          const estimatedVersionSpace = doc.size * (doc.versionCount - 1) * 0.8;
+          csv += `"${doc.name}","${doc.library}","${doc.folderPath}",${doc.versionCount},${doc.size},${estimatedVersionSpace},"${doc.path}"\n`;
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `sharepoint-version-analysis-${new Date().toISOString().split('T')[0]}.csv`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+      };
+
       const toggleSelection = (docId) => {
         const newSelected = new Set(selectedDocs);
         if (newSelected.has(docId)) {
@@ -310,7 +513,6 @@
         setSelectedDocs(new Set());
       };
 
-      // Expand/collapse document version list
       const toggleExpand = (docId) => {
         const newExpanded = new Set(expandedDocs);
         if (newExpanded.has(docId)) {
@@ -321,7 +523,6 @@
         setExpandedDocs(newExpanded);
       };
 
-      // Version selection handlers
       const toggleVersionSelection = (docId, versionId) => {
         setSelectedVersions(prev => {
           const docVersions = new Set(prev[docId] || []);
@@ -351,12 +552,10 @@
         }));
       };
 
-      // Get total selected versions count
       const getTotalSelectedVersionsCount = () => {
         return Object.values(selectedVersions).reduce((total, versions) => total + versions.size, 0);
       };
 
-      // Delete versions
       const deleteVersions = async () => {
         if (selectedDocs.size === 0) return;
 
@@ -387,8 +586,6 @@
 
         alert(`Successfully deleted version history for ${successCount} document(s). Versions moved to Recycle Bin.`);
         setSelectedDocs(new Set());
-        
-        // Clear cache and refresh
         setScanCache(prev => {
           const newCache = { ...prev };
           delete newCache[siteUrl];
@@ -398,14 +595,13 @@
         setLoading(false);
       };
 
-      // Delete selected versions for a specific document
       const deleteSelectedVersions = async (docId) => {
         const doc = documents.find(d => d.id === docId);
         const versionIds = selectedVersions[docId];
 
         if (!doc || !versionIds || versionIds.size === 0) return;
 
-        if (!confirm(`Delete ${versionIds.size} selected version(s) for "${doc.name}"? Versions will be moved to the SharePoint Recycle Bin.`)) return;
+        if (!confirm(`Delete ${versionIds.size} selected version(s) for "${doc.name}"?`)) return;
 
         setLoading(true);
         let successCount = 0;
@@ -421,10 +617,8 @@
             );
             successCount++;
           }
-          alert(`Successfully deleted ${successCount} version(s). Moved to Recycle Bin.`);
+          alert(`Successfully deleted ${successCount} version(s)`);
           setSelectedVersions(prev => ({ ...prev, [docId]: new Set() }));
-          
-          // Clear cache and refresh
           setScanCache(prev => {
             const newCache = { ...prev };
             delete newCache[siteUrl];
@@ -439,12 +633,11 @@
         }
       };
 
-      // Delete all selected versions across all documents
       const deleteAllSelectedVersions = async () => {
         const totalVersions = getTotalSelectedVersionsCount();
         if (totalVersions === 0) return;
 
-        if (!confirm(`Delete ${totalVersions} selected version(s) across all documents? Versions will be moved to the SharePoint Recycle Bin.`)) return;
+        if (!confirm(`Delete ${totalVersions} selected version(s)?`)) return;
 
         setLoading(true);
         let successCount = 0;
@@ -467,10 +660,8 @@
               successCount++;
             }
           }
-          alert(`Successfully deleted ${successCount} version(s). Moved to Recycle Bin.`);
+          alert(`Successfully deleted ${successCount} version(s)`);
           setSelectedVersions({});
-          
-          // Clear cache and refresh
           setScanCache(prev => {
             const newCache = { ...prev };
             delete newCache[siteUrl];
@@ -488,7 +679,7 @@
       const formatBytes = (bytes) => {
         if (bytes === 0) return '0 Bytes';
         const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
       };
@@ -499,7 +690,6 @@
         return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       };
 
-      // Login screen
       if (!isAuthenticated) {
         return (
           <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
@@ -521,7 +711,8 @@
         );
       }
 
-      // Main app
+      const analytics = documents.length > 0 ? getStorageAnalytics() : null;
+
       return (
         <div className="min-h-screen bg-gray-50">
           <div className="bg-white shadow-sm border-b">
@@ -570,7 +761,6 @@
                     title="Refresh scan results"
                   >
                     <RefreshCw className="w-4 h-4" />
-                    Refresh
                   </button>
                 )}
               </div>
@@ -583,87 +773,239 @@
               {scanCache[siteUrl] && !loading && (
                 <div className="mt-3 text-green-600 text-sm flex items-center gap-2">
                   <AlertCircle className="w-4 h-4" />
-                  Using cached results. Click "Refresh" to rescan.
+                  Using cached results. Click refresh to rescan.
                 </div>
               )}
             </div>
 
-            {documents.length > 0 && (
-              <div className="bg-white rounded-lg shadow p-6 mb-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Search Documents
-                    </label>
-                    <input
-                      type="text"
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      placeholder="Search by name, library, or folder..."
-                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Minimum Versions
-                    </label>
-                    <input
-                      type="number"
-                      value={minVersions}
-                      onChange={(e) => setMinVersions(Math.max(1, parseInt(e.target.value) || 1))}
-                      min="1"
-                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-
-                  <div className="flex items-end gap-2">
-                    <button
-                      onClick={selectAll}
-                      className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm transition-colors"
-                    >
-                      Select All
-                    </button>
-                    <button
-                      onClick={deselectAll}
-                      className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm transition-colors"
-                    >
-                      Deselect All
-                    </button>
-                  </div>
+            {analytics && (
+              <div className="mb-6">
+                <div className="flex justify-between items-center mb-3">
+                  <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                    <BarChart className="w-5 h-5" />
+                    Storage Analytics Dashboard
+                  </h2>
+                  <button
+                    onClick={() => setShowDashboard(!showDashboard)}
+                    className="text-sm text-blue-600 hover:text-blue-800"
+                  >
+                    {showDashboard ? 'Hide' : 'Show'}
+                  </button>
                 </div>
 
-                <div className="flex justify-between items-center pt-4 border-t">
-                  <div className="text-sm text-gray-600">
-                    {selectedDocs.size} of {filteredDocs.length} documents selected
-                    {getTotalSelectedVersionsCount() > 0 && (
-                      <span className="ml-4 text-blue-600">
-                        ({getTotalSelectedVersionsCount()} versions selected)
-                      </span>
-                    )}
+                {showDashboard && (
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                    <div className="bg-white rounded-lg shadow p-4">
+                      <div className="text-sm text-gray-600">Total Documents</div>
+                      <div className="text-2xl font-bold text-gray-900">{analytics.totalDocs}</div>
+                      <div className="text-xs text-gray-500 mt-1">{analytics.totalVersions} total versions</div>
+                    </div>
+                    <div className="bg-white rounded-lg shadow p-4">
+                      <div className="text-sm text-gray-600">Avg Versions/Doc</div>
+                      <div className="text-2xl font-bold text-gray-900">{analytics.avgVersionsPerDoc.toFixed(1)}</div>
+                      <div className="text-xs text-gray-500 mt-1">per document</div>
+                    </div>
+                    <div className="bg-white rounded-lg shadow p-4">
+                      <div className="text-sm text-gray-600">Estimated Version Storage</div>
+                      <div className="text-2xl font-bold text-orange-600">{formatBytes(analytics.estimatedVersionSize)}</div>
+                      <div className="text-xs text-gray-500 mt-1">~80% of current size</div>
+                    </div>
+                    <div className="bg-white rounded-lg shadow p-4">
+                      <div className="text-sm text-gray-600">Selected Impact</div>
+                      <div className="text-2xl font-bold text-green-600">{formatBytes(analytics.selectedSize)}</div>
+                      <div className="text-xs text-gray-500 mt-1">potential space to reclaim</div>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    {getTotalSelectedVersionsCount() > 0 && (
+                )}
+
+                {showDashboard && analytics.topWasters.length > 0 && (
+                  <div className="bg-white rounded-lg shadow p-4 mb-6">
+                    <h3 className="font-medium text-gray-800 mb-3">Top 10 Space Wasters</h3>
+                    <div className="space-y-2">
+                      {analytics.topWasters.map((doc, idx) => (
+                        <div key={doc.id} className="flex items-center justify-between text-sm">
+                          <div className="flex-1 truncate">
+                            <span className="text-gray-400 mr-2">{idx + 1}.</span>
+                            <span className="text-gray-700">{doc.name}</span>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <span className="text-gray-600">{doc.versionCount} versions</span>
+                            <span className="font-semibold text-orange-600">{formatBytes(doc.estimatedVersionSpace)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {documents.length > 0 && (
+              <>
+                <div className="bg-white rounded-lg shadow p-6 mb-6">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Search Documents
+                      </label>
+                      <input
+                        type="text"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="Search..."
+                        className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Min Versions
+                      </label>
+                      <input
+                        type="number"
+                        value={minVersions}
+                        onChange={(e) => setMinVersions(Math.max(1, parseInt(e.target.value) || 1))}
+                        min="1"
+                        className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Sort By
+                      </label>
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="versionCount">Version Count</option>
+                        <option value="size">File Size</option>
+                        <option value="spaceImpact">Space Impact</option>
+                        <option value="name">Name</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-end gap-2">
                       <button
-                        onClick={deleteAllSelectedVersions}
-                        disabled={loading}
-                        className="px-6 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 text-white rounded-lg flex items-center gap-2 transition-colors"
+                        onClick={exportToCSV}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm transition-colors flex items-center gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Export
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                      <Zap className="w-4 h-4" />
+                      Bulk Select
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={selectAll} className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded">
+                        All
+                      </button>
+                      <button onClick={deselectAll} className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded">
+                        None
+                      </button>
+                      <button onClick={() => bulkSelectByVersions(5)} className="px-3 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-800 rounded">
+                        5+ Versions
+                      </button>
+                      <button onClick={() => bulkSelectByVersions(10)} className="px-3 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-800 rounded">
+                        10+ Versions
+                      </button>
+                      <button onClick={() => bulkSelectBySize(50)} className="px-3 py-1 text-xs bg-purple-100 hover:bg-purple-200 text-purple-800 rounded">
+                        50+ MB
+                      </button>
+                      <button onClick={() => bulkSelectBySize(100)} className="px-3 py-1 text-xs bg-purple-100 hover:bg-purple-200 text-purple-800 rounded">
+                        100+ MB
+                      </button>
+                      <button onClick={() => bulkSelectByAge(6)} className="px-3 py-1 text-xs bg-orange-100 hover:bg-orange-200 text-orange-800 rounded">
+                        Versions 6+ mo old
+                      </button>
+                      <button onClick={() => bulkSelectByAge(12)} className="px-3 py-1 text-xs bg-orange-100 hover:bg-orange-200 text-orange-800 rounded">
+                        Versions 12+ mo old
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="border-t mt-4 pt-4">
+                    <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                      <Zap className="w-4 h-4" />
+                      Quick Actions
+                    </h3>
+                    <div className="flex flex-wrap gap-2">
+                      <button 
+                        onClick={() => keepOnlyXVersions(1)}
+                        disabled={selectedDocs.size === 0}
+                        className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white rounded"
+                      >
+                        Keep Current Only
+                      </button>
+                      <button 
+                        onClick={() => keepOnlyXVersions(3)}
+                        disabled={selectedDocs.size === 0}
+                        className="px-3 py-1 text-xs bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white rounded"
+                      >
+                        Keep Last 3
+                      </button>
+                      <button 
+                        onClick={() => keepOnlyXVersions(5)}
+                        disabled={selectedDocs.size === 0}
+                        className="px-3 py-1 text-xs bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white rounded"
+                      >
+                        Keep Last 5
+                      </button>
+                      <button 
+                        onClick={() => deleteVersionsOlderThan(6)}
+                        disabled={selectedDocs.size === 0}
+                        className="px-3 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-300 text-white rounded"
+                      >
+                        Delete 6+ mo old
+                      </button>
+                      <button 
+                        onClick={() => deleteVersionsOlderThan(12)}
+                        disabled={selectedDocs.size === 0}
+                        className="px-3 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-300 text-white rounded"
+                      >
+                        Delete 12+ mo old
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center pt-4 border-t mt-4">
+                    <div className="text-sm text-gray-600">
+                      {selectedDocs.size} of {filteredDocs.length} selected
+                      {getTotalSelectedVersionsCount() > 0 && (
+                        <span className="ml-4 text-blue-600">
+                          ({getTotalSelectedVersionsCount()} versions)
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      {getTotalSelectedVersionsCount() > 0 && (
+                        <button
+                          onClick={deleteAllSelectedVersions}
+                          disabled={loading}
+                          className="px-4 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 text-white rounded-lg text-sm flex items-center gap-2"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Delete {getTotalSelectedVersionsCount()} Versions
+                        </button>
+                      )}
+                      <button
+                        onClick={deleteVersions}
+                        disabled={selectedDocs.size === 0 || loading}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-lg text-sm flex items-center gap-2"
                       >
                         <Trash2 className="w-4 h-4" />
-                        Delete {getTotalSelectedVersionsCount()} Selected Versions
+                        Delete All Versions
                       </button>
-                    )}
-                    <button
-                      onClick={deleteVersions}
-                      disabled={selectedDocs.size === 0 || loading}
-                      className="px-6 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-lg flex items-center gap-2 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      Delete All Versions (Selected Docs)
-                    </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </>
             )}
 
             {filteredDocs.length > 0 && (
@@ -671,182 +1013,134 @@
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-
-                      </th>
-                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Select
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Document Name
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Library
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Folder
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Versions
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Size
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Actions
-                      </th>
+                      <th className="px-3 py-3"></th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Select</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Document</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Library</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Folder</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Versions</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Size</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Est. Version Space</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {filteredDocs.map(doc => (
-                      <React.Fragment key={doc.id}>
-                        <tr className="hover:bg-gray-50">
-                          <td className="px-3 py-4">
-                            <button
-                              onClick={() => toggleExpand(doc.id)}
-                              className="text-gray-500 hover:text-gray-700"
-                              title={expandedDocs.has(doc.id) ? "Collapse versions" : "Expand versions"}
-                            >
-                              {expandedDocs.has(doc.id) ? (
-                                <ChevronDown className="w-5 h-5" />
-                              ) : (
-                                <ChevronRight className="w-5 h-5" />
-                              )}
-                            </button>
-                          </td>
-                          <td className="px-3 py-4">
-                            <input
-                              type="checkbox"
-                              checked={selectedDocs.has(doc.id)}
-                              onChange={() => toggleSelection(doc.id)}
-                              className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
-                            />
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-900 font-medium">
-                            {doc.name}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            {doc.library}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            <span className="font-mono text-xs" title={doc.folderPath}>
-                              {doc.folderPath || '/'}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4">
-                            <span className={`inline-flex px-3 py-1 text-sm font-semibold rounded-full ${
-                              doc.versionCount > 10
-                                ? 'bg-red-100 text-red-800'
-                                : doc.versionCount > 5
-                                ? 'bg-yellow-100 text-yellow-800'
-                                : 'bg-green-100 text-green-800'
-                            }`}>
-                              {doc.versionCount}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            {formatBytes(doc.size)}
-                          </td>
-                          <td className="px-6 py-4">
-                            <a
-                              href={doc.path}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:text-blue-800 text-sm"
-                            >
-                              View
-                            </a>
-                          </td>
-                        </tr>
-                        {expandedDocs.has(doc.id) && (
-                          <tr>
-                            <td colSpan="8" className="px-6 py-4 bg-gray-50">
-                              <div className="border rounded-lg bg-white p-4">
-                                <div className="flex justify-between items-center mb-3">
-                                  <h4 className="font-medium text-gray-800">Version History</h4>
-                                  <div className="flex gap-2">
-                                    <button
-                                      onClick={() => selectAllVersions(doc.id)}
-                                      className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors"
-                                      disabled={doc.versions.length <= 1}
-                                    >
-                                      Select All
-                                    </button>
-                                    <button
-                                      onClick={() => deselectAllVersions(doc.id)}
-                                      className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors"
-                                    >
-                                      Deselect All
-                                    </button>
-                                    <button
-                                      onClick={() => deleteSelectedVersions(doc.id)}
-                                      disabled={(selectedVersions[doc.id]?.size || 0) === 0 || loading}
-                                      className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white rounded transition-colors flex items-center gap-1"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                      Delete Selected ({selectedVersions[doc.id]?.size || 0})
-                                    </button>
-                                  </div>
-                                </div>
-                                {doc.versions.length > 0 ? (
-                                  <table className="min-w-full text-sm">
-                                    <thead className="bg-gray-100">
-                                      <tr>
-                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Select</th>
-                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Version</th>
-                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Modified</th>
-                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Modified By</th>
-                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Status</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-200">
-                                      {doc.versions.map((version, index) => (
-                                        <tr key={version.id} className={index === 0 ? 'bg-blue-50' : 'hover:bg-gray-50'}>
-                                          <td className="px-3 py-2">
-                                            {index === 0 ? (
-                                              <span className="text-xs text-gray-400" title="Cannot delete current version">—</span>
-                                            ) : (
-                                              <input
-                                                type="checkbox"
-                                                checked={selectedVersions[doc.id]?.has(version.id) || false}
-                                                onChange={() => toggleVersionSelection(doc.id, version.id)}
-                                                className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
-                                              />
-                                            )}
-                                          </td>
-                                          <td className="px-3 py-2 text-gray-700">
-                                            {version.id}
-                                          </td>
-                                          <td className="px-3 py-2 text-gray-600">
-                                            {formatDate(version.lastModifiedDateTime)}
-                                          </td>
-                                          <td className="px-3 py-2 text-gray-600">
-                                            {version.lastModifiedBy?.user?.displayName || version.lastModifiedBy?.user?.email || 'Unknown'}
-                                          </td>
-                                          <td className="px-3 py-2">
-                                            {index === 0 ? (
-                                              <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
-                                                Current
-                                              </span>
-                                            ) : (
-                                              <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">
-                                                Previous
-                                              </span>
-                                            )}
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
+                    {filteredDocs.map(doc => {
+                      const estimatedVersionSpace = doc.size * (doc.versionCount - 1) * 0.8;
+                      return (
+                        <React.Fragment key={doc.id}>
+                          <tr className="hover:bg-gray-50">
+                            <td className="px-3 py-4">
+                              <button
+                                onClick={() => toggleExpand(doc.id)}
+                                className="text-gray-500 hover:text-gray-700"
+                              >
+                                {expandedDocs.has(doc.id) ? (
+                                  <ChevronDown className="w-5 h-5" />
                                 ) : (
-                                  <p className="text-gray-500 text-sm">No version history available</p>
+                                  <ChevronRight className="w-5 h-5" />
                                 )}
-                              </div>
+                              </button>
+                            </td>
+                            <td className="px-3 py-4">
+                              <input
+                                type="checkbox"
+                                checked={selectedDocs.has(doc.id)}
+                                onChange={() => toggleSelection(doc.id)}
+                                className="w-4 h-4 text-blue-600 rounded"
+                              />
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-900 font-medium">{doc.name}</td>
+                            <td className="px-6 py-4 text-sm text-gray-600">{doc.library}</td>
+                            <td className="px-6 py-4 text-sm text-gray-600">
+                              <span className="font-mono text-xs">{doc.folderPath || '/'}</span>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`inline-flex px-3 py-1 text-sm font-semibold rounded-full ${
+                                doc.versionCount > 10 ? 'bg-red-100 text-red-800' :
+                                doc.versionCount > 5 ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-green-100 text-green-800'
+                              }`}>
+                                {doc.versionCount}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600">{formatBytes(doc.size)}</td>
+                            <td className="px-6 py-4 text-sm font-semibold text-orange-600">{formatBytes(estimatedVersionSpace)}</td>
+                            <td className="px-6 py-4">
+                              <a href={doc.path} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 text-sm">
+                                View
+                              </a>
                             </td>
                           </tr>
-                        )}
-                      </React.Fragment>
-                    ))}
+                          {expandedDocs.has(doc.id) && (
+                            <tr>
+                              <td colSpan="9" className="px-6 py-4 bg-gray-50">
+                                <div className="border rounded-lg bg-white p-4">
+                                  <div className="flex justify-between items-center mb-3">
+                                    <h4 className="font-medium text-gray-800">Version History</h4>
+                                    <div className="flex gap-2">
+                                      <button onClick={() => selectAllVersions(doc.id)} className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded" disabled={doc.versions.length <= 1}>
+                                        Select All
+                                      </button>
+                                      <button onClick={() => deselectAllVersions(doc.id)} className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded">
+                                        Deselect All
+                                      </button>
+                                      <button onClick={() => deleteSelectedVersions(doc.id)} disabled={(selectedVersions[doc.id]?.size || 0) === 0 || loading} className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white rounded flex items-center gap-1">
+                                        <Trash2 className="w-3 h-3" />
+                                        Delete ({selectedVersions[doc.id]?.size || 0})
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {doc.versions.length > 0 ? (
+                                    <table className="min-w-full text-sm">
+                                      <thead className="bg-gray-100">
+                                        <tr>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Select</th>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Version</th>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Modified</th>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Modified By</th>
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-gray-200">
+                                        {doc.versions.map((version, index) => (
+                                          <tr key={version.id} className={index === 0 ? 'bg-blue-50' : 'hover:bg-gray-50'}>
+                                            <td className="px-3 py-2">
+                                              {index === 0 ? (
+                                                <span className="text-xs text-gray-400">—</span>
+                                              ) : (
+                                                <input
+                                                  type="checkbox"
+                                                  checked={selectedVersions[doc.id]?.has(version.id) || false}
+                                                  onChange={() => toggleVersionSelection(doc.id, version.id)}
+                                                  className="w-4 h-4 text-blue-600 rounded"
+                                                />
+                                              )}
+                                            </td>
+                                            <td className="px-3 py-2 text-gray-700">{version.id}</td>
+                                            <td className="px-3 py-2 text-gray-600">{formatDate(version.lastModifiedDateTime)}</td>
+                                            <td className="px-3 py-2 text-gray-600">{version.lastModifiedBy?.user?.displayName || version.lastModifiedBy?.user?.email || 'Unknown'}</td>
+                                            <td className="px-3 py-2">
+                                              {index === 0 ? (
+                                                <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-800">Current</span>
+                                              ) : (
+                                                <span className="inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 text-gray-600">Previous</span>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  ) : (
+                                    <p className="text-gray-500 text-sm">No version history available</p>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -855,24 +1149,20 @@
             {loading && documents.length === 0 && (
               <div className="bg-white rounded-lg shadow p-12 text-center">
                 <RefreshCw className="w-12 h-12 text-blue-600 animate-spin mx-auto mb-4" />
-                <p className="text-gray-600 font-medium">{loadingStatus || 'Analyzing SharePoint site...'}</p>
+                <p className="text-gray-600 font-medium">{loadingStatus || 'Analyzing...'}</p>
                 {progressStats.total > 0 && (
                   <div className="mt-4">
                     <div className="text-sm text-gray-500">
-                      Libraries scanned: {progressStats.current} / {progressStats.total}
+                      Libraries: {progressStats.current} / {progressStats.total}
                     </div>
                     <div className="text-sm text-blue-600 font-medium mt-1">
-                      Documents with multiple versions found: {progressStats.found}
+                      Found: {progressStats.found} documents
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2 mt-3">
-                      <div 
-                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${(progressStats.current / progressStats.total) * 100}%` }}
-                      ></div>
+                      <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(progressStats.current / progressStats.total) * 100}%` }}></div>
                     </div>
                   </div>
                 )}
-                <p className="text-gray-400 text-sm mt-4">Using parallel processing for faster scanning...</p>
               </div>
             )}
 
@@ -880,7 +1170,6 @@
               <div className="bg-white rounded-lg shadow p-12 text-center">
                 <FileText className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                 <p className="text-gray-600">No documents with multiple versions found</p>
-                <p className="text-gray-400 text-sm mt-2">Try lowering the minimum versions filter</p>
               </div>
             )}
           </div>
