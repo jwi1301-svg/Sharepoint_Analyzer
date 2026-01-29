@@ -818,21 +818,39 @@
                   </div>
                 )}
 
+                {showDashboard && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                      <div className="text-sm text-blue-800">
+                        <strong>About Version Storage:</strong> All document versions are stored in the same SharePoint library as the current file. 
+                        They're accessible via the file's version history in SharePoint. When deleted, versions move to the site's Recycle Bin for 93 days before being permanently removed.
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {showDashboard && analytics.topWasters.length > 0 && (
                   <div className="bg-white rounded-lg shadow p-4 mb-6">
                     <h3 className="font-medium text-gray-800 mb-3">Top 10 Space Wasters</h3>
                     <div className="space-y-2">
                       {analytics.topWasters.map((doc, idx) => (
-                        <div key={doc.id} className="flex items-center justify-between text-sm">
+                        <a
+                          key={doc.id}
+                          href={doc.path}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-between text-sm hover:bg-gray-50 p-2 rounded transition-colors cursor-pointer"
+                        >
                           <div className="flex-1 truncate">
                             <span className="text-gray-400 mr-2">{idx + 1}.</span>
-                            <span className="text-gray-700">{doc.name}</span>
+                            <span className="text-blue-600 hover:text-blue-800 hover:underline">{doc.name}</span>
                           </div>
                           <div className="flex items-center gap-4">
                             <span className="text-gray-600">{doc.versionCount} versions</span>
                             <span className="font-semibold text-orange-600">{formatBytes(doc.estimatedVersionSpace)}</span>
                           </div>
-                        </div>
+                        </a>
                       ))}
                     </div>
                   </div>
@@ -930,50 +948,6 @@
                     </div>
                   </div>
 
-                  <div className="border-t mt-4 pt-4">
-                    <h3 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
-                      <Zap className="w-4 h-4" />
-                      Quick Actions
-                    </h3>
-                    <div className="flex flex-wrap gap-2">
-                      <button 
-                        onClick={() => keepOnlyXVersions(1)}
-                        disabled={selectedDocs.size === 0}
-                        className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white rounded"
-                      >
-                        Keep Current Only
-                      </button>
-                      <button 
-                        onClick={() => keepOnlyXVersions(3)}
-                        disabled={selectedDocs.size === 0}
-                        className="px-3 py-1 text-xs bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white rounded"
-                      >
-                        Keep Last 3
-                      </button>
-                      <button 
-                        onClick={() => keepOnlyXVersions(5)}
-                        disabled={selectedDocs.size === 0}
-                        className="px-3 py-1 text-xs bg-orange-600 hover:bg-orange-700 disabled:bg-gray-300 text-white rounded"
-                      >
-                        Keep Last 5
-                      </button>
-                      <button 
-                        onClick={() => deleteVersionsOlderThan(6)}
-                        disabled={selectedDocs.size === 0}
-                        className="px-3 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-300 text-white rounded"
-                      >
-                        Delete 6+ mo old
-                      </button>
-                      <button 
-                        onClick={() => deleteVersionsOlderThan(12)}
-                        disabled={selectedDocs.size === 0}
-                        className="px-3 py-1 text-xs bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-300 text-white rounded"
-                      >
-                        Delete 12+ mo old
-                      </button>
-                    </div>
-                  </div>
-
                   <div className="flex justify-between items-center pt-4 border-t mt-4">
                     <div className="text-sm text-gray-600">
                       {selectedDocs.size} of {filteredDocs.length} selected
@@ -991,17 +965,9 @@
                           className="px-4 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 text-white rounded-lg text-sm flex items-center gap-2"
                         >
                           <Trash2 className="w-4 h-4" />
-                          Delete {getTotalSelectedVersionsCount()} Versions
+                          Delete {getTotalSelectedVersionsCount()} Selected Versions
                         </button>
                       )}
-                      <button
-                        onClick={deleteVersions}
-                        disabled={selectedDocs.size === 0 || loading}
-                        className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-lg text-sm flex items-center gap-2"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        Delete All Versions
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -1009,7 +975,7 @@
             )}
 
             {filteredDocs.length > 0 && (
-              <div className="bg-white rounded-lg shadow overflow-hidden">
+              <div className="bg-white rounded-lg shadow overflow-hidden overflow-x-auto">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
