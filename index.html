@@ -347,6 +347,7 @@
       // Filter and sort documents
       useEffect(() => {
         let filtered = documents.filter(doc =>
+          doc.versionCount >= minVersions &&
           (doc.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
            doc.library.toLowerCase().includes(searchTerm.toLowerCase()) ||
            (doc.folderPath && doc.folderPath.toLowerCase().includes(searchTerm.toLowerCase())))
@@ -365,7 +366,7 @@
         });
 
         setFilteredDocs(filtered);
-      }, [searchTerm, documents, sortBy]);
+      }, [searchTerm, minVersions, documents, sortBy]);
 
       const bulkSelectByVersions = (minVers) => {
         const toSelect = filteredDocs.filter(doc => doc.versionCount >= minVers).map(d => d.id);
@@ -504,12 +505,21 @@
           }
           alert(`Successfully deleted ${successCount} version(s)`);
           setSelectedVersions(prev => ({ ...prev, [docId]: new Set() }));
-          setDeletedDocs(prev => new Set([...prev, docId]));
+          
+          // Track which versions were deleted for this document
+          setDeletedVersionInfo(prev => ({
+            ...prev,
+            [docId]: {
+              count: versionIds.size,
+              timestamp: new Date().toLocaleTimeString()
+            }
+          }));
           
           // Update the document in state to reflect version deletion
           setDocuments(prevDocs => prevDocs.map(d => {
             if (d.id === docId) {
-              return { ...d, versionCount: 1, versions: d.versions.slice(0, 1) };
+              const remainingVersions = d.versions.filter(v => !versionIds.has(v.id));
+              return { ...d, versionCount: remainingVersions.length, versions: remainingVersions };
             }
             return d;
           }));
@@ -551,15 +561,23 @@
           alert(`Successfully deleted ${successCount} version(s)`);
           setSelectedVersions({});
           
-          // Mark all affected documents as deleted
-          const affectedDocIds = Object.keys(selectedVersions).filter(id => selectedVersions[id]?.size > 0);
-          setDeletedDocs(prev => new Set([...prev, ...affectedDocIds]));
+          // Track which versions were deleted for each document
+          const deletionInfo = {};
+          for (const [docId, versionIds] of Object.entries(selectedVersions)) {
+            if (versionIds.size > 0) {
+              deletionInfo[docId] = {
+                count: versionIds.size,
+                timestamp: new Date().toLocaleTimeString()
+              };
+            }
+          }
+          setDeletedVersionInfo(prev => ({ ...prev, ...deletionInfo }));
           
           // Update documents in state to reflect version deletion
           setDocuments(prevDocs => prevDocs.map(d => {
-            if (affectedDocIds.includes(d.id)) {
-              const deletedVersionIds = selectedVersions[d.id];
-              const remainingVersions = d.versions.filter(v => !deletedVersionIds.has(v.id));
+            const versionIds = selectedVersions[d.id];
+            if (versionIds && versionIds.size > 0) {
+              const remainingVersions = d.versions.filter(v => !versionIds.has(v.id));
               return { ...d, versionCount: remainingVersions.length, versions: remainingVersions };
             }
             return d;
@@ -961,7 +979,7 @@
                       const estimatedVersionSpace = doc.size * (doc.versionCount - 1) * 0.8;
                       return (
                         <React.Fragment key={doc.id}>
-                          <tr id={`doc-row-${doc.id}`} className={`hover:bg-gray-50 transition-colors duration-200 ${deletedDocs.has(doc.id) ? 'bg-green-50' : ''}`}>
+                          <tr id={`doc-row-${doc.id}`} className={`hover:bg-gray-50 transition-colors duration-200 ${deletedVersionInfo[doc.id] ? 'bg-green-50' : ''}`}>
                             <td className="px-3 py-4">
                               <button
                                 onClick={() => toggleExpand(doc.id)}
@@ -984,9 +1002,9 @@
                             </td>
                             <td className="px-6 py-4 text-sm text-gray-900 font-medium">
                               {doc.name}
-                              {deletedDocs.has(doc.id) && (
+                              {deletedVersionInfo[doc.id] && (
                                 <span className="ml-2 inline-flex px-2 py-0.5 text-xs font-medium rounded-full bg-green-100 text-green-800">
-                                  ✓ Versions Deleted
+                                  ✓ Deleted {deletedVersionInfo[doc.id].count} version{deletedVersionInfo[doc.id].count > 1 ? 's' : ''} at {deletedVersionInfo[doc.id].timestamp}
                                 </span>
                               )}
                             </td>
